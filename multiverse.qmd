@@ -5,7 +5,9 @@ execute:
   cache: true
 ---
 
-Multiverse analyse in vanilla tidyverse, with fast backends!
+Multiverse analyse in vanilla tidyverse, with multidplyr.
+
+GitHub: <https://github.com/mvuorre/multiverse-icecream>
 
 ```{r}
 #| message: false
