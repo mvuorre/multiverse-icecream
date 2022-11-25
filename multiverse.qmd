@@ -1,0 +1,123 @@
+---
+title: "Tidyverse + multidplyr + multiverse = unicorns and ice cream"
+author: Matti Vuorre
+execute:
+  cache: true
+---
+
+Multiverse analyse in vanilla tidyverse, with fast backends!
+
+```{r}
+#| message: false
+library(gapminder)
+library(broom)
+library(tidyverse)
+
+gapminder <- gapminder %>%
+  mutate(gdpPercap_log = log(gdpPercap),
+         pop = pop/1000)
+```
+
+OK here's how to do a multiverse analysis in just tidyverse. Function names mirror what they do in {specr}.
+
+```{r}
+setup_specs <- function(
+    data, 
+    by,
+    y,
+    x,
+    covariate,
+    model
+) {
+  
+  data %>% 
+    bind_rows(.id = "data_id") %>% 
+    group_by(data_id, across({{by}})) %>% 
+    nest() %>% 
+    expand_grid(
+      y,
+      x,
+      covariate,
+      model
+    ) %>% 
+    mutate(
+      formula = paste(y, "~ 1 +", x, "+", covariate)
+    )
+}
+```
+
+Here it is:
+
+```{r}
+setup_specs(
+  data = gapminder,
+  by = country,
+  y = c("lifeExp"),
+  x = c("gdpPercap", "gdpPercap_log"),
+  covariate = c("year", "pop"),
+  model = c("lm", "glm")
+)
+```
+
+Works with multiple datasets and `by` variables (but note `by` has to be in all datasets). Here I just run it over the same dataset a bunch of times for illustration
+
+```{r}
+specs <- setup_specs(
+  data = list(
+    gapminder, gapminder, gapminder, gapminder,
+    gapminder, gapminder, gapminder, gapminder,
+    gapminder, gapminder, gapminder, gapminder,
+    gapminder, gapminder, gapminder, gapminder,
+    gapminder, gapminder, gapminder, gapminder,
+    gapminder, gapminder, gapminder, gapminder
+    ),
+  by = c(continent, country),
+  y = c("lifeExp"),
+  x = c("gdpPercap", "gdpPercap_log"),
+  covariate = c("year", "pop"),
+  model = c("lm", "glm")
+)
+specs
+```
+
+Running a multiverse analysis is then just iterating over the rows of that table as you best see fit. Here's with no optimization:
+
+```{r}
+now <- Sys.time()
+specs %>% 
+  mutate(
+    out = pmap(
+      list(model, formula, data),
+      ~do.call(..1, list(formula = ..2, data = ..3)) %>% 
+        tidy()
+    )
+  )
+then <- Sys.time()
+then - now
+```
+
+We can easily parallelize this with [multidplyr](https://multidplyr.tidyverse.org/index.html), but note that this works best when data is large, and there will be very small benefits for fast function calls (in fact it may run significantly slower). Here we see a nice speedup. The nice thing about multidplyr is that you can basically use familiar dplyr syntax and just assign groups to nodes.
+
+```{r}
+library(multidplyr)
+cluster <- new_cluster(4)
+
+cluster_library(cluster, c("purrr", "broom"))
+now <- Sys.time()
+specs %>% 
+  # Parallelize over continents and datasets
+  group_by(continent, data_id) %>% 
+  partition(cluster) %>% 
+  # Run function as above
+  mutate(
+    out = pmap(
+      list(model, formula, data),
+      ~do.call(..1, list(formula = ..2, data = ..3)) %>% 
+        tidy()
+    )
+  ) %>% 
+  # Collect results from nodes
+  collect()
+then <- Sys.time()
+then - now
+```
